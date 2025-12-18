@@ -1,0 +1,153 @@
+import warnings
+import os
+
+# Suppress all warnings including LangGraph deprecation
+warnings.filterwarnings("ignore")
+os.environ["PYTHONWARNINGS"] = "ignore"
+
+from langchain_core.tools import tool
+from backend.tools import call_emergency
+from backend.config import GROQ_API_KEY
+from langchain_groq import ChatGroq
+from langgraph.prebuilt import create_react_agent
+
+@tool
+def ask_mental_health_specialist(query: str) -> str:
+    """
+    Generate a therapeutic response.
+    Use this for all general user queries, mental health questions, emotional concerns,
+    or to offer empathetic, evidence-based guidance in a conversational tone.
+    """
+    from langchain_groq import ChatGroq
+    from backend.config import GROQ_API_KEY
+    
+    try:
+        # Use Groq for fast therapeutic responses
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0.3,
+            api_key=GROQ_API_KEY,
+            request_timeout=25.0  # Set timeout to 25 seconds
+        )
+        
+        prompt = f"""You are Dr. Emily Hartman, a warm and experienced clinical psychologist specializing in mental health therapy.
+
+Respond to this patient with:
+- Emotional attunement and empathy
+- Gentle normalization of their feelings
+- Practical therapeutic guidance
+- Strengths-focused support
+
+Patient's concern: {query}
+
+Provide a compassionate, professional therapeutic response:"""
+        
+        response = llm.invoke(prompt)
+        return response.content
+    except Exception as e:
+        return f"I'm here to support you, but I'm experiencing technical difficulties right now. Could you please try again? (Error: {str(e)[:100]})"
+
+@tool
+def emergency_call_tool() -> str:
+    """
+    Place an emergency call to the safety helpline's phone number via Twilio.
+    Use this ONLY if the user expresses suicidal ideation, intent to self-harm,
+    or describes a mental health emergency requiring immediate help.
+    """
+    result = call_emergency()
+    return str(result)
+
+
+@tool
+def find_nearby_therapists_by_location(location: str) -> str:
+    """
+    Finds and returns a list of licensed therapists near the specified location.
+
+    Args:
+        location (str): The name of the city or area in which the user is seeking therapy support.
+
+    Returns:
+        str: A newline-separated string containing therapist names and contact info.
+    """
+    return (
+        f"Here are some therapists near {location}:\n"
+        "- Dr. Ayesha Kapoor - +1 (555) 123-4567\n"
+        "- Dr. James Patel - +1 (555) 987-6543\n"
+        "- MindCare Counseling Center - +1 (555) 222-3333"
+    )
+
+
+# Emergency keywords for safety
+EMERGENCY_KEYWORDS = [
+    'suicide', 'kill myself', 'end my life', 'want to die', 
+    'better off dead', 'harm myself', 'cut myself', 'overdose',
+    'jump off', 'hang myself', 'shoot myself', 'end it all'
+]
+
+# Create LangChain ReAct Agent with native Groq client
+tools = [ask_mental_health_specialist, emergency_call_tool, find_nearby_therapists_by_location]
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0.1,
+    api_key=GROQ_API_KEY
+)
+
+graph = create_react_agent(llm, tools=tools)
+
+SYSTEM_PROMPT = """You are an AI engine supporting mental health conversations with warmth and vigilance.
+You have access to three tools:
+
+1. `ask_mental_health_specialist`: Use this tool to answer all emotional or psychological queries with therapeutic guidance.
+2. `locate_therapist_tool`: Use this tool if the user asks about nearby therapists or if recommending local professional help would be beneficial.
+3. `emergency_call_tool`: Use this immediately if the user expresses suicidal thoughts, self-harm intentions, or is in crisis.
+
+Always take necessary action. Respond kindly, clearly, and supportively."""
+
+def parse_response(stream):
+    tool_called_name = "None"
+    final_response = None
+
+    for s in stream:
+        # Check if a tool was called
+        tool_data = s.get('tools')
+        if tool_data:
+            tool_messages = tool_data.get('messages')
+            if tool_messages and isinstance(tool_messages, list):
+                for msg in tool_messages:
+                    tool_called_name = getattr(msg, 'name', 'None')
+
+        # Check if agent returned a message
+        agent_data = s.get('agent')
+        if agent_data:
+            messages = agent_data.get('messages')
+            if messages and isinstance(messages, list):
+                for msg in messages:
+                    # Only capture AIMessage content, not ToolMessage
+                    if hasattr(msg, 'content') and msg.content:
+                        # Filter out tool call artifacts from the response
+                        if not (hasattr(msg, 'type') and msg.type == 'tool'):
+                            # Also check if content doesn't start with function call syntax
+                            content_str = str(msg.content)
+                            if not content_str.strip().startswith('<function='):
+                                final_response = content_str
+
+    return tool_called_name, final_response
+
+'''if __name__ == "__main__":
+    while True:
+        user_input = input("User: ")
+        print(f"Received user input: {user_input[:200]}...")
+        inputs = {"messages": [("system", SYSTEM_PROMPT), ("user", user_input)]}
+        stream = graph.stream(inputs, stream_mode="updates")
+        tool_called_name, final_response = parse_response(stream)
+        
+        # Show which model/tool is being used
+        if tool_called_name == "ask_mental_health_specialist":
+            print(f"\n🔧 TOOL: {tool_called_name}")
+            print(f"🤖 MODEL: Groq (llama-3.3-70b-versatile) - Therapeutic Mode")
+        elif tool_called_name != "None":
+            print(f"\n🔧 TOOL: {tool_called_name}")
+        else:
+            print(f"\n🤖 MODEL: Groq (llama-3.3-70b-versatile)")
+        
+        print(f"ANSWER: {final_response}\n")'''
